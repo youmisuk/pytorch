@@ -1,4 +1,3 @@
-import _LAZYC
 from .version import __version__
 from ._patched_functions import _apply_patches
 import torch
@@ -86,6 +85,7 @@ _setup_ltc_flags()
 if int(os.environ.get('PT_LTC_DEBUG', '0')):
     _fd, _tmp_fname = _setup_debug_env()
 
+import _LAZYC
 
 def _prepare_to_exit():
     _LAZYC._prepare_to_exit()
