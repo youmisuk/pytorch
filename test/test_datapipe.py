@@ -586,6 +586,98 @@ class TestFunctionalIterDataPipe(TestCase):
 
         self.assertEqual(list(concat_dp), list(range(10)) + list(range(5)))
 
+
+    def test_fork_datapipe(self):
+        input_dp = IDP(range(10))
+
+        # Test Case: one child DataPipe yields all value first
+        dp1, dp2, dp3 = input_dp.fork(num_instances=3)
+        output1, output2, output3 = list(dp1), list(dp2), list(dp3)
+        self.assertEqual(list(range(10)), output1)
+        self.assertEqual(list(range(10)), output2)
+        self.assertEqual(list(range(10)), output3)
+
+        # Test Case: two child DataPipes yield value together
+        dp1, dp2 = input_dp.fork(num_instances=2)
+        output = []
+        for n1, n2 in zip(dp1, dp2):
+            output.append((n1, n2))
+        self.assertEqual([(i, i) for i in range(10)], output)
+
+        # Test Case: one child DataPipe yields all value first, but buffer_size = 5 being too small
+        dp1, dp2 = input_dp.fork(num_instances=2, buffer_size=5)
+        output1, output2 = [], []
+        with self.assertRaises(BufferError):
+            list(dp1)
+
+        # Test Case: two child DataPipes yield value together with buffer size 1
+        dp1, dp2 = input_dp.fork(num_instances=2, buffer_size=1)
+        output = []
+        for n1, n2 in zip(dp1, dp2):
+            output.append((n1, n2))
+        self.assertEqual([(i, i) for i in range(10)], output)
+
+        # Test Case: make sure logic related to slowest_ptr is working properly
+        dp1, dp2, dp3 = input_dp.fork(num_instances=3)
+        output1, output2 , output3 = [], [], []
+        i = 0
+        for n1, n2 in zip(dp1, dp2):
+            output1.append(n1)
+            output2.append(n2)
+            i += 1
+            if i == 5:  # yield all of dp3 when halfway through dp1, dp2
+                output3 = list(dp3)
+                break
+        self.assertEqual(list(range(5)), output1)
+        self.assertEqual(list(range(5)), output2)
+        self.assertEqual(list(range(10)), output3)
+
+        # Test Case: DataPipe doesn't reset if this pipe hasn't been read
+        dp1, dp2 = input_dp.fork(num_instances=2)
+        i1, i2 = iter(dp1), iter(dp2)
+        output2 = []
+        i = 0
+        for n2 in i2:
+            output2.append(n2)
+            i += 1
+            if i == 5:
+                i1 = iter(dp1)  # Doesn't reset because i1 hasn't been read
+        self.assertEqual(list(range(10)), output2)
+
+        # Test Case: DataPipe reset when some of it have been read
+        dp1, dp2 = input_dp.fork(num_instances=2)
+        i1, i2 = iter(dp1), iter(dp2)
+        output1, output2 = [], []
+        i = 0
+        for n1, n2 in zip(i1, i2):
+            output1.append(n1)
+            output2.append(n2)
+            i += 1
+            if i == 5:
+                i1 = iter(dp1)  # Reset both all child DataPipe
+        self.assertEqual(list(range(5)) + list(range(10)), output1)
+        self.assertEqual(list(range(5)) + list(range(10)), output2)
+
+        # Test Case: DataPipe reset, even when some other child DataPipes are not read
+        dp1, dp2, dp3 = input_dp.fork(num_instances=3)
+        output1, output2 = list(dp1), list(dp2)
+        self.assertEqual(list(range(10)), output1)
+        self.assertEqual(list(range(10)), output2)
+        output1, output2 = list(dp1), list(dp2)
+        self.assertEqual(list(range(10)), output1)  # Resets even though dp3 has not been read
+        i = 0
+        output3 = []
+        for n3 in dp3:
+            output3.append(n3)
+            i += 1
+            if i == 5:
+                output1 = list(dp1)  # Resets even though dp3 is only partially read
+                self.assertEqual(list(range(5)), output3)
+                self.assertEqual(list(range(10)), output1)
+                break
+        self.assertEqual(list(range(10)), list(dp3))  # dp3 has to read from the start again
+
+
     def test_map_datapipe(self):
         input_dp = IDP(range(10))
 
@@ -1370,24 +1462,25 @@ class TestGraph(TestCase):
         expected: Dict[Any, Any] = {mapped_dp: {numbers_dp: {}}}
         self.assertEqual(expected, graph)
 
-    # TODO(VitalyFedyunin): This test is incorrect because of 'buffer' nature
-    # of the fork fake implementation, update fork first and fix this test too
     @skipIfNoDill
     def test_traverse_forked(self):
         numbers_dp = NumbersDataset(size=50)
-        dp0, dp1, dp2 = numbers_dp.fork(3)
+        dp0, dp1, dp2 = numbers_dp.fork(num_instances=3)
         dp0_upd = dp0.map(lambda x: x * 10)
         dp1_upd = dp1.filter(lambda x: x % 3 == 1)
         combined_dp = dp0_upd.mux(dp1_upd, dp2)
         graph = torch.utils.data.graph.traverse(combined_dp)
-        expected = {combined_dp: {dp0_upd: {dp0: {}}, dp1_upd: {dp1: {}}, dp2: {}}}
+        expected = {combined_dp: {dp0_upd: {dp0: {dp0.main_datapipe: {dp0.main_datapipe.main_datapipe: {}}}},
+                                  dp1_upd: {dp1: {dp1.main_datapipe: {dp1.main_datapipe.main_datapipe: {}}}},
+                                  dp2: {dp2.main_datapipe: {dp2.main_datapipe.main_datapipe: {}}}}}
         self.assertEqual(expected, graph)
 
 
 class TestSharding(TestCase):
+
     def _get_pipeline(self):
         numbers_dp = NumbersDataset(size=10)
-        dp0, dp1 = numbers_dp.fork(2)
+        dp0, dp1 = numbers_dp.fork(num_instances=2)
         dp0_upd = dp0.map(lambda x: x * 10)
         dp1_upd = dp1.filter(lambda x: x % 3 == 1)
         combined_dp = dp0_upd.mux(dp1_upd)
