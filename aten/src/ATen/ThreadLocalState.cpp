@@ -19,6 +19,7 @@ ThreadLocalState::ThreadLocalState(bool keep_grad_mode)
 #if !defined(CAFFE2_IS_XPLAT_BUILD) && !defined(C10_MOBILE)
   keep_grad_mode_ = keep_grad_mode;
 #endif
+  python_mode_state_ = at::impl::PythonModeTLS::get_state();
   bumped_record_all_functions_ = at::checkRecordAllFunctions();
 }
 
@@ -43,6 +44,8 @@ void ThreadLocalState::setThreadLocalState(
                                       /* inference_mode */ state.autograd_tls_.get_inference_mode());
   c10::AutogradState::set_tls_state(new_state);
 #endif
+
+  at::impl::PythonModeTLS::set_state(state.python_mode_state_);
 
   at::set_record_function_tls_(state.rf_tls_);
 
