@@ -53,3 +53,16 @@ TEST(TorchDeployGPUTest, SimpleModel) {
 
   ASSERT_TRUE(ref_output.allclose(output, 1e-03, 1e-05));
 }
+
+TEST(TorchDeployGPUTest, TensorrtModel) {
+  if (!torch::cuda::is_available()) {
+    GTEST_SKIP();
+  }
+  auto packagePath = path(
+      "TENSORRT_IMPORT", "torch/csrc/deploy/example/generated/tensorrt_import");
+  torch::deploy::InterpreterManager m(1);
+  torch::deploy::Package p = m.load_package(packagePath);
+  auto model = p.load_pickle("model", "model.pkl");
+  auto output = at::ones({1, 2, 3}).cuda() * 2;
+  ASSERT_TRUE(output.allclose(model({}).toTensor()));
+}
